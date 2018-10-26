@@ -8,14 +8,17 @@ import torch
 from torch import nn
 from torch import optim
 from tqdm import tqdm
+import argparse
 
 from utils import USE_CUDA
 
 from utils import get_torch_variable_from_np, get_data
-from scorer import eval_train_batch, pruning_eval_data
+from scorer import eval_train_batch, eval_data
 from data_utils import output_predict
 
 from data_utils import *
+
+from allennlp.modules.elmo import Elmo, batch_to_ids
 
 def seed_everything(seed, cuda=False):
   # Set the random seed manually for reproducibility.
@@ -47,8 +50,8 @@ def make_parser():
                             help='OOD predicate disambiguation accuracy')
 
     # preprocess
-    # parser.add_argument('--preprocess', action='store_true',
-    #                     help='Preprocess')
+    parser.add_argument('--preprocess', action='store_true',
+                        help='Preprocess')
     parser.add_argument('--tmp_path', type=str, help='temporal path')
     parser.add_argument('--model_path', type=str, help='model path')
     parser.add_argument('--result_path', type=str, help='result path')
@@ -73,14 +76,18 @@ def make_parser():
                             help='POS tag embedding size')
     parser.add_argument('--lemma_emb_size', type=int, default=100,
                             help='Lemma embedding size')
-    parser.add_argument('--deprel_emb_size', type=int, default=64,
-                            help='Dependency relation embedding size')
+    
     parser.add_argument('--bilstm_hidden_size', type=int, default=512,
                             help='Bi-LSTM hidden state size')
     parser.add_argument('--bilstm_num_layers', type=int, default=4,
                             help='Bi-LSTM layer number')
     parser.add_argument('--valid_step', type=int, default=1000,
                             help='Valid step size')
+
+    parser.add_argument('--use_deprel', action='store_true',
+                        help='[USE] dependency relation')
+    parser.add_argument('--deprel_emb_size', type=int, default=64,
+                            help='Dependency relation embedding size')
 
     parser.add_argument('--use_highway', action='store_true',
                         help='[USE] highway connection')
@@ -97,7 +104,7 @@ def make_parser():
     parser.add_argument('--flag_emb_size',type=int, default=16,
                             help='Predicate flag embedding size')
 
-    parser.add_argument('--use_elmo_emb', action='store_true',
+    parser.add_argument('--use_elmo', action='store_true',
                         help='[USE] ELMo embedding')
     parser.add_argument('--elmo_emb_size',type=int, default=300,
                             help='ELMo embedding size')
@@ -135,70 +142,78 @@ if __name__ == '__main__':
     # set random seed
     seed_everything(args.seed, USE_CUDA)
 
-    # do preprocessing
-    # if args.preprocess:
     train_file = args.train_data
     dev_file = args.valid_data
     test_file = args.test_data
     test_ood_file = args.ood_data
 
-    tmp_path = args.tmp_path
+    # do preprocessing
+    if args.preprocess:
+        
+        tmp_path = args.tmp_path
 
-    if tmp_path is None:
-        print('Fatal error: tmp_path cannot be None!')
-        exit()
+        if tmp_path is None:
+            print('Fatal error: tmp_path cannot be None!')
+            exit()
 
-    print('start preprocessing data...')
+        print('start preprocessing data...')
 
-    start_t = time.time()
+        start_t = time.time()
 
-    # make word/pos/lemma/deprel/argument vocab
-    print('\n-- making (word/lemma/pos/argument/predicate) vocab --')
-    vocab_path = tmp_path
-    print('word:')
-    make_word_vocab(train_file,vocab_path, unify_pred=unify_pred)
-    print('pos:')
-    make_pos_vocab(train_file,vocab_path, unify_pred=unify_pred)
-    print('lemma:')
-    make_lemma_vocab(train_file,vocab_path, unify_pred=unify_pred)
-    print('deprel:')
-    make_deprel_vocab(train_file,vocab_path, unify_pred=unify_pred)
-    print('argument:')
-    make_argument_vocab(train_file, dev_file, test_file, vocab_path, unify_pred=unify_pred)
-    print('predicate:')
-    make_pred_vocab(train_file, dev_file, test_file, vocab_path)
+        # make word/pos/lemma/deprel/argument vocab
+        print('\n-- making (word/lemma/pos/argument/predicate) vocab --')
+        vocab_path = tmp_path
+        print('word:')
+        make_word_vocab(train_file,vocab_path, unify_pred=False)
+        print('pos:')
+        make_pos_vocab(train_file,vocab_path, unify_pred=False)
+        print('lemma:')
+        make_lemma_vocab(train_file,vocab_path, unify_pred=False)
+        print('deprel:')
+        make_deprel_vocab(train_file,vocab_path, unify_pred=False)
+        print('argument:')
+        make_argument_vocab(train_file, dev_file, test_file, vocab_path, unify_pred=False)
+        print('predicate:')
+        make_pred_vocab(train_file, dev_file, test_file, vocab_path)
 
-    deprel_vocab = load_deprel_vocab(os.path.join(tmp_path, 'deprel.vocab'))
+        deprel_vocab = load_deprel_vocab(os.path.join(tmp_path, 'deprel.vocab'))
 
-    # shrink pretrained embeding
-    print('\n-- shrink pretrained embeding --')
-    pretrain_file = args.pretrain_embedding
-    pretrained_emb_size = args.pretrain_emb_size
-    pretrain_path = tmp_path
-    shrink_pretrained_embedding(train_file, dev_file, test_file, pretrain_file, pretrained_emb_size, pretrain_path)
+        # shrink pretrained embeding
+        print('\n-- shrink pretrained embeding --')
+        pretrain_file = args.pretrain_embedding
+        pretrained_emb_size = args.pretrain_emb_size
+        pretrain_path = tmp_path
+        shrink_pretrained_embedding(train_file, dev_file, test_file, pretrain_file, pretrained_emb_size, pretrain_path)
 
-    train_res = make_dataset_input(train_file, os.path.join(tmp_path,'train.input'), unify_pred=unify_pred, deprel_vocab=deprel_vocab)
-    dev_res = make_dataset_input(dev_file, os.path.join(tmp_path,'dev.input'), unify_pred=unify_pred, deprel_vocab=deprel_vocab)
-    test_res = make_dataset_input(test_file, os.path.join(tmp_path,'test.input'), unify_pred=unify_pred, deprel_vocab=deprel_vocab)
-    if test_ood_file is not None:
-        ood_res = make_dataset_input(test_ood_file, os.path.join(tmp_path,'test_ood.input'), unify_pred=unify_pred, deprel_vocab=deprel_vocab)
+        make_dataset_input(train_file, os.path.join(tmp_path,'train.input'), unify_pred=False, deprel_vocab=deprel_vocab, pickle_dump_path=os.path.join(tmp_path,'train.pickle.input'))
+        make_dataset_input(dev_file, os.path.join(tmp_path,'dev.input'), unify_pred=False, deprel_vocab=deprel_vocab, pickle_dump_path=os.path.join(tmp_path,'dev.pickle.input'))
+        make_dataset_input(test_file, os.path.join(tmp_path,'test.input'), unify_pred=False, deprel_vocab=deprel_vocab, pickle_dump_path=os.path.join(tmp_path,'test.pickle.input'))
+        if test_ood_file is not None:
+            make_dataset_input(test_ood_file, os.path.join(tmp_path,'test_ood.input'), unify_pred=False, deprel_vocab=deprel_vocab, pickle_dump_path=os.path.join(tmp_path,'test_ood.pickle.input'))
 
-    print('\t data preprocessing finished! consuming {} s'.format(int(time.time()-start_t)))
+        print('\t data preprocessing finished! consuming {} s'.format(int(time.time()-start_t)))
 
     print('\t start loading data...')
     start_t = time.time()
 
-    train_input_file = os.path.join(os.path.dirname(__file__),'temp/train.input')
-    dev_input_file = os.path.join(os.path.dirname(__file__),'temp/dev.input')
-    test_input_file = os.path.join(os.path.dirname(__file__),'temp/test.input')
+    train_input_file = os.path.join(os.path.dirname(__file__),'temp/train.pickle.input')
+    dev_input_file = os.path.join(os.path.dirname(__file__),'temp/dev.pickle.input')
+    test_input_file = os.path.join(os.path.dirname(__file__),'temp/test.pickle.input')
     if test_ood_file is not None:
-        test_ood_input_file = os.path.join(os.path.dirname(__file__),'temp/test_ood.input')
+        test_ood_input_file = os.path.join(os.path.dirname(__file__),'temp/test_ood.pickle.input')
     
-    train_dataset = data_utils.load_dataset_input(train_input_file)
-    dev_dataset = data_utils.load_dataset_input(dev_input_file)
-    test_dataset = data_utils.load_dataset_input(test_input_file)
+    train_data = data_utils.load_dump_data(train_input_file)
+    dev_data = data_utils.load_dump_data(dev_input_file)
+    test_data = data_utils.load_dump_data(test_input_file)
     if test_ood_file is not None:
-        test_ood_dataset = data_utils.load_dataset_input(test_ood_input_file)
+        test_ood_data = data_utils.load_dump_data(test_ood_input_file)
+
+
+    train_dataset = train_data['input_data']
+    dev_dataset = dev_data['input_data']
+    test_dataset = test_data['input_data']
+    if test_ood_file is not None:
+        test_ood_dataset = test_ood_data['input_data']
 
     word2idx = data_utils.load_dump_data(os.path.join(os.path.dirname(__file__),'temp/word2idx.bin'))
     idx2word = data_utils.load_dump_data(os.path.join(os.path.dirname(__file__),'temp/idx2word.bin'))
@@ -224,18 +239,18 @@ if __name__ == '__main__':
 
     #result_path = os.path.join(os.path.dirname(__file__),'result/')
 
+    result_path = args.result_path
+
     print('\t start building model...')
     start_t = time.time()
 
-    dev_predicate_sum = dev_res[0]
-    test_predicate_sum = test_res[0]
-
+    dev_predicate_sum = dev_data['predicate_sum']
+    test_predicate_sum = test_data['predicate_sum']
     if test_ood_file is not None:
-        test_ood_predicate_sum = ood_res[0]
+        test_ood_predicate_sum = test_ood_data['predicate_sum']
 
     dev_predicate_correct = int(dev_predicate_sum * args.dev_pred_acc)
     test_predicate_correct = int(test_predicate_sum * args.test_pred_acc)
-
     if test_ood_file is not None:
         test_ood_predicate_correct = int(test_ood_predicate_sum * args.ood_pred_acc)
 
@@ -267,9 +282,19 @@ if __name__ == '__main__':
 
     use_elmo = args.use_elmo
     elmo_embedding_size = args.elmo_emb_size
-    elmo_options_file = args.elmo_options_file
-    elmo_weight_file = args.elmo_weight_file
+    elmo_options_file = args.elmo_options
+    elmo_weight_file = args.elmo_weight
+    elmo = None
+    if use_elmo:
+        # Create the ELMo class.  This example computes two output representation
+        # layers each with separate layer weights.
+        # We recommend adding dropout (50% is good default) either here or elsewhere
+        # where ELMo is used (e.g. in the next layer bi-LSTM).
+        elmo = Elmo(elmo_options_file, elmo_weight_file, num_output_representations=2,
+                    do_layer_norm=False, dropout=0)
 
+        if USE_CUDA:
+            elmo.cuda()
 
     use_self_attn = args.use_self_attn
     self_attn_head = args.self_attn_heads
@@ -282,7 +307,7 @@ if __name__ == '__main__':
 
     if args.train:
         FLAG = 'TRAIN'
-    if args.Valid:
+    if args.eval:
         FLAG = 'EVAL'
         MODEL_PATH = args.model
 
@@ -357,7 +382,7 @@ if __name__ == '__main__':
                 bs = train_input_data['batch_size']
                 sl = train_input_data['seq_len']
                 
-                out = srl_model(train_input_data)
+                out = srl_model(train_input_data, elmo)
 
                 loss = criterion(out, target_batch_variable)
 
@@ -379,7 +404,7 @@ if __name__ == '__main__':
                     eval_train_batch(epoch, batch_i, loss.data[0], flat_argument, pred, argument2idx)
 
                     print('dev:')
-                    score, dev_output = eval_data(srl_model, criterion, dev_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, unify_pred, dev_predicate_correct, dev_predicate_sum)
+                    score, dev_output = eval_data(srl_model, elmo, dev_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, False, dev_predicate_correct, dev_predicate_sum)
                     if dev_best_score is None or score[2] > dev_best_score[2]:
                         dev_best_score = score
                         output_predict(os.path.join(result_path,'dev_argument_{:.2f}.pred'.format(dev_best_score[2]*100)),dev_output)
@@ -387,6 +412,16 @@ if __name__ == '__main__':
                     print('\tdev best P:{:.2f} R:{:.2f} F1:{:.2f} NP:{:.2f} NR:{:.2f} NF1:{:.2f}'.format(dev_best_score[0] * 100, dev_best_score[1] * 100,
                                                                                                     dev_best_score[2] * 100, dev_best_score[3] * 100,
                                                                                                     dev_best_score[4] * 100, dev_best_score[5] * 100))
+
+                    print('test:')
+                    score, test_output = eval_data(srl_model, elmo, test_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, False, test_predicate_correct, test_predicate_sum)
+                    if test_best_score is None or score[2] > test_best_score[2]:
+                        test_best_score = score
+                        output_predict(os.path.join(result_path,'test_argument_{:.2f}.pred'.format(test_best_score[2]*100)),test_output)
+                        torch.save(srl_model, os.path.join(os.path.dirname(__file__),'model/best_{:.2f}.pkl'.format(test_best_score[2]*100)))
+                    print('\ttest best P:{:.2f} R:{:.2f} F1:{:.2f} NP:{:.2f} NR:{:.2f} NF1:{:.2f}'.format(test_best_score[0] * 100, test_best_score[1] * 100,
+                                                                                                    test_best_score[2] * 100, test_best_score[3] * 100,
+                                                                                                    test_best_score[4] * 100, test_best_score[5] * 100))
 
                 
                 print('\repoch {} batch {} batch consume:{} s'.format(epoch, batch_i, int(time.time()-epoch_start)), end="")
@@ -396,14 +431,14 @@ if __name__ == '__main__':
         srl_model = torch.load(MODEL_PATH)
         srl_model.eval()
         print('test:')
-        score, test_output = eval_data(srl_model, criterion, test_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, unify_pred, test_predicate_correct, test_predicate_sum)
-        print('\ttest best P:{:.2f} R:{:.2f} F1:{:.2f} NP:{:.2f} NR:{:.2f} NF1:{:.2f}'.format(test_best_score[0] * 100, test_best_score[1] * 100,
-                                                                                        test_best_score[2] * 100, test_best_score[3] * 100,
-                                                                                        test_best_score[4] * 100, test_best_score[5] * 100))
+        score, test_output = eval_data(srl_model, elmo, test_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, False, test_predicate_correct, test_predicate_sum)
+        print('\ttest P:{:.2f} R:{:.2f} F1:{:.2f} NP:{:.2f} NR:{:.2f} NF1:{:.2f}'.format(score[0] * 100, score[1] * 100,
+                                                                                        score[2] * 100, score[3] * 100,
+                                                                                        score[4] * 100, score[5] * 100))
 
         if test_ood_file is not None: 
             print('ood:')
-            score, ood_output = eval_data(srl_model, criterion, test_ood_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, unify_pred, test_ood_predicate_correct, test_ood_predicate_sum)
+            score, ood_output = eval_data(srl_model, elmo, test_ood_dataset, batch_size, word2idx, lemma2idx, pos2idx, pretrain2idx, deprel2idx, argument2idx, idx2argument, False, test_ood_predicate_correct, test_ood_predicate_sum)
             output_predict(os.path.join(result_path,'ood_argument_{:.2f}.pred'.format(score[2]*100)),ood_output)
             print('\tood P:{:.2f} R:{:.2f} F1:{:.2f} NP:{:.2f} NR:{:.2f} NF1:{:.2f}'.format(score[0] * 100, score[1] * 100,
                                                                                             score[2] * 100, score[3] * 100,

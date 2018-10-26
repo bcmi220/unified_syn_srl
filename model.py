@@ -15,47 +15,40 @@ from rcnn import RCNN
 from utils import USE_CUDA
 from utils import get_torch_variable_from_np, get_data
 
-from allennlp.modules.elmo import Elmo
-from allennlp.data.dataset import Dataset
-from allennlp.data import Token, Vocabulary, Instance
-from allennlp.data.fields import TextField
-from allennlp.data.token_indexers.elmo_indexer import ELMoTokenCharactersIndexer
+from allennlp.modules.elmo import Elmo, batch_to_ids
+
+# <!-- pytorch and allennlp upgrade
+# from allennlp.modules.elmo import Elmo
+# from allennlp.data.dataset import Dataset
+# from allennlp.data import Token, Vocabulary, Instance
+# from allennlp.data.fields import TextField
+# from allennlp.data.token_indexers.elmo_indexer import ELMoTokenCharactersIndexer
 
 
-indexer = ELMoTokenCharactersIndexer()
-def batch_to_ids(batch):
-    """
-    Given a batch (as list of tokenized sentences), return a batch
-    of padded character ids.
-    """
-    instances = []
-    for sentence in batch:
-        tokens = [Token(token) for token in sentence]
-        field = TextField(tokens, {'character_ids': indexer})
-        instance = Instance({"elmo": field})
-        instances.append(instance)
 
-    dataset = Dataset(instances)
-    vocab = Vocabulary()
-    # dataset.index_instances(vocab)
-    for instance in dataset.instances:
-        instance.index_fields(vocab)
-    return dataset.as_tensor_dict()['elmo']['character_ids']
 
-elmo = None
-def get_elmo(options_file, weight_file):
-    global elmo
+# indexer = ELMoTokenCharactersIndexer()
+# def batch_to_ids(batch):
+#     """
+#     Given a batch (as list of tokenized sentences), return a batch
+#     of padded character ids.
+#     """
+#     instances = []
+#     for sentence in batch:
+#         tokens = [Token(token) for token in sentence]
+#         field = TextField(tokens, {'character_ids': indexer})
+#         instance = Instance({"elmo": field})
+#         instances.append(instance)
 
-    # Create the ELMo class.  This example computes two output representation
-    # layers each with separate layer weights.
-    # We recommend adding dropout (50% is good default) either here or elsewhere
-    # where ELMo is used (e.g. in the next layer bi-LSTM).
-    elmo = Elmo(options_file, weight_file, num_output_representations=2,
-                do_layer_norm=False, dropout=0)
+#     dataset = Dataset(instances)
+#     vocab = Vocabulary()
+#     # dataset.index_instances(vocab)
+#     for instance in dataset.instances:
+#         instance.index_fields(vocab)
+#     return dataset.as_tensor_dict()['elmo']['character_ids']
 
-    if USE_CUDA:
-        elmo.cuda()
 
+# -->
 
 class End2EndModel(nn.Module):
     def __init__(self, model_params):
@@ -128,10 +121,6 @@ class End2EndModel(nn.Module):
         self.use_elmo = model_params['use_elmo']
         self.elmo_emb_size = model_params['elmo_embedding_size']
         if self.use_elmo:
-            self.elmo_options_file = model_params['elmo_options_file']
-            self.elmo_weight_file = model_params['elmo_weight_file']
-            get_elmo(self.elmo_options_file, self.elmo_weight_file)
-            
             input_emb_size += self.elmo_emb_size
             self.elmo_mlp = nn.Sequential(nn.Linear(1024, self.elmo_emb_size), nn.ReLU())
             self.elmo_w = nn.Parameter(torch.Tensor([0.5,0.5]))
@@ -221,7 +210,7 @@ class End2EndModel(nn.Module):
         return soft_max_nd.transpose(axis, len(input_size)-1)
         
 
-    def forward(self, batch_input):
+    def forward(self, batch_input, elmo):
         
         flag_batch = get_torch_variable_from_np(batch_input['flag'])
         word_batch = get_torch_variable_from_np(batch_input['word'])

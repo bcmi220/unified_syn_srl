@@ -723,11 +723,11 @@ def shrink_pretrained_embedding(train_file, dev_file, test_file, pretrained_file
     with open(pretrain_emb_path,'wb') as f:
         pickle.dump(pretrained_embedding,f)
 
-# argument model input
-# SENTID(0), PREDID(1), SENTLEN(2), TOKENID(3), RINDEX(4), FLAG(5), FORM(6), LEMMA(7), POS(8), HEAD(9), RHEAD(10), DEPREL(11), LABEL(12)
-# argument model input will copy the sentence by count of predicate.
-# note: in original input, the RINDEX=TOKENID and HEAD=RHEAD because of no pruning.
-def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob=0.0, deprel_vocab=None, unify_pred=False, predicate_recog_data=None, use_golden_syn=False, use_nomore_tag=False): #, word_filter=None
+# # argument model input
+# # SENTID(0), PREDID(1), SENTLEN(2), TOKENID(3), RINDEX(4), FLAG(5), FORM(6), LEMMA(7), POS(8), HEAD(9), RHEAD(10), DEPREL(11), LABEL(12)
+# # argument model input will copy the sentence by count of predicate.
+# # note: in original input, the RINDEX=TOKENID and HEAD=RHEAD because of no pruning.
+def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob=0.0, deprel_vocab=None, unify_pred=False, predicate_recog_data=None, use_golden_syn=False, use_nomore_tag=False, pickle_dump_path=None): #, word_filter=None
 
     if random_error_prob > 0.0:
         assert deprel_vocab is not None
@@ -790,10 +790,16 @@ def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob
     if not quiet:
         print('\tdump dataset input at:{}'.format(output_path))
 
+    output_data = []
     uas_count = 0
     las_count = 0
     total = 0
     sentence_idx = 0
+
+    predicate_sum = 0
+    argument_sum = 0
+    target_sum = 0
+
     # arg_prune = 0
     # sum_prune = 0
     with open(output_path, 'w') as f:
@@ -803,11 +809,14 @@ def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob
             for i in range(len(sentence)):
                 if sentence[i][12] == 'Y':
 
+                    predicate_sum += 1
+
                     output_block = []
 
                     if unify_pred:
                         output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), '1', '1', '0', '<DUMMY>', '<DUMMY>', '<DUMMY>', str(int(sentence[i][0])+1), str(int(sentence[i][0])+1), '<DUMMY>', sentence[i][13].split('.')[1]])                    
                     
+                    target_sum += len(sentence)
 
                     if use_nomore_tag:
                         start_idx = -1
@@ -865,6 +874,8 @@ def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob
 
                         tag = sentence[j][14+predicate_idx] # APRED
 
+                        if tag != '_':
+                            argument_sum += 1
 
                         # generate random error
                         if random_error_prob > 0.0:
@@ -881,12 +892,15 @@ def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob
                         if sentence[j][8] == sentence[j][9] and sentence[j][10] == sentence[j][11]:
                             las_count += 1
 
+                        
+
                         if unify_pred:
                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), str(int(ID)+1), str(int(ID)+1), str(IS_PRED), word, lemma, pos, str(int(head)+1), str(int(head)+1), deprel, tag])
                         else:
                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)), ID, ID, str(IS_PRED), word, lemma, pos, head, head, deprel, tag])
                         
                     if len(output_block)>0:
+                        output_data.append(output_block)
                         for item in output_block:
                             f.write('\t'.join(item))
                             f.write('\n')
@@ -900,353 +914,535 @@ def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob
         print('\tUAS:{:.2f} LAS:{:.2f}'.format(uas_count/total*100,las_count/total*100))
         # print('\t Argument pruning:{} Sum pruning:{}'.format(arg_prune, sum_prune))
 
+    if pickle_dump_path is not None:
+        dump_data = {'predicate_sum':predicate_sum, 'target_sum':target_sum, 'out_of_target_sum':0, 'argument_sum':argument_sum, 'out_of_pruning_sum':0, 'input_data':output_data, 'K':0}
+        with open(pickle_dump_path, 'wb') as df:
+            pickle.dump(dump_data, df)
+
+
+# argument model input
+# SENTID(0), PREDID(1), SENTLEN(2), TOKENID(3), RINDEX(4), FLAG(5), FORM(6), LEMMA(7), POS(8), HEAD(9), RHEAD(10), DEPREL(11), LABEL(12)
+# argument model input will copy the sentence by count of predicate.
+# note: in original input, the RINDEX=TOKENID and HEAD=RHEAD because of no pruning.
+# def make_dataset_input(dataset_file, output_path, quiet=False, random_error_prob=0.0, deprel_vocab=None, unify_pred=False, predicate_recog_data=None, pickle_dump_path=None): #, use_golden_syn=False, word_filter=None
+
+#     if random_error_prob > 0.0:
+#         assert deprel_vocab is not None
+
+#     # load the original dataset
+#     with open(dataset_file,'r') as f:
+#         data = f.readlines()
+
+#     origin_data = []
+#     sentence = []
+#     for i in range(len(data)):
+#         if len(data[i].strip())>0:
+#             sentence.append(data[i].strip().split('\t'))
+#         else:
+#             origin_data.append(sentence)
+#             sentence = []
+
+#     if len(sentence) > 0:
+#         origin_data.append(sentence)
+
+#     # filter the predicate by recognition results in ConNLL2008 task
+#     if predicate_recog_data is not None:
+#         with open(predicate_recog_data, 'r') as f:
+#             pred_recog_data = f.readlines()
+
+#         pred_predict_data = []
+#         pre_sentence = []
+
+#         for i in range(len(pred_recog_data)):
+#             if len(pred_recog_data[i].strip())>0:
+#                 pre_sentence.append(pred_recog_data[i].strip().split('\t'))
+#             else:
+#                 pred_predict_data.append(pre_sentence)
+#                 pre_sentence = []
+
+#         if len(pre_sentence) > 0:
+#             pred_predict_data.append(pre_sentence)
+
+#         assert len(origin_data) == len(pred_predict_data)
+
+#         pred_total = 0
+#         recog_correct = 0
+#         recog_label_correct = 0
+
+#         for i in range(len(origin_data)):
+#             assert len(origin_data[i]) == len(pred_predict_data[i])
+#             for j in range(len(origin_data[i])):
+#                 if origin_data[i][j][12]=='Y':
+#                     pred_total += 1
+#                 if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]!='_':
+#                     recog_correct += 1
+#                 if origin_data[i][j][12]=='Y' and origin_data[i][j][13].split('.')[1] == pred_predict_data[i][j][1]:
+#                     recog_label_correct += 1
+#                 if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]=='_':
+#                     origin_data[i][j][12] = '_'
+#         if not quiet:
+#             print('\t predicate recognition total:{} correct:{} label correct:{}'.format(pred_total, recog_correct, recog_label_correct))
+
+#     # show the output path
+#     if not quiet:
+#         print('\tdump dataset input at:{}'.format(output_path))
+
+#     uas_count = 0
+#     las_count = 0
+#     total = 0
+#     sentence_idx = 0
+#     predicate_sum = 0
+#     argument_sum = 0
+#     target_sum = 0
+
+#     uas_count = 0
+#     las_count = 0
+#     total = 0
+#     if random_error_prob > 0.0:
+#         for idx in tqdm(range(len(origin_data))):
+#             sentence = origin_data[idx]
+#             for item in sentence:
+#                 item[9] = item[8]
+#                 item[11] = item[10]
+#             for item in sentence:
+#                 rd = random.randint(0,10000)/10000
+#                 if rd < random_error_prob:
+#                     overflow_ctx = 0
+#                     while overflow_ctx < overflow_max:
+#                         rd_head = random.randint(0,len(sentence))
+#                         if is_valid_tree(sentence, rd_head, int(item[0])):
+#                             item[9] = str(rd_head)
+#                             break
+#                         overflow_ctx += 1
+#                     rd_rel = deprel_vocab[random.randint(0,len(deprel_vocab)-1)]
+#                     item[11] = rd_rel
+#                 total += 1
+#                 if item[8] == item[9]:
+#                     uas_count += 1
+#                 if item[8] == item[9] and item[10] == item[11]:
+#                     las_count += 1
+#         if not quiet:
+#             print('\t after random error UAS:{:.2f} LAS:{:.2f}'.format(uas_count/total*100,las_count/total*100))
+
+
+#     output_data = []
+#     with open(output_path, 'w') as f:
+#         for sidx in tqdm(range(len(origin_data))):
+#             sentence = origin_data[sidx]
+#             predicate_idx = 0
+#             for i in range(len(sentence)):
+#                 if sentence[i][12] == 'Y':
+
+#                     predicate_sum += 1
+
+#                     output_block = []
+
+#                     if unify_pred:
+#                         output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), '1', '1', '0', '<DUMMY>', '<DUMMY>', '<DUMMY>', str(int(sentence[i][0])+1), str(int(sentence[i][0])+1), '<DUMMY>', sentence[i][13].split('.')[1]])                    
+                    
+#                     target_sum += len(sentence)
+#                     for j in range(len(sentence)):
+#                         ID = sentence[j][0] # ID
+#                         IS_PRED = 0
+#                         if i == j:
+#                             IS_PRED = 1
+                        
+#                         word = sentence[j][1].lower() # FORM
+
+#                         if is_number(word):
+#                             word = _NUM_
+                        
+#                         lemma = sentence[j][3].lower() # PLEMMA
+#                         if is_number(lemma):
+#                             lemma = _NUM_
+
+#                         pos = sentence[j][5] # PPOS
+
+#                         if use_golden_syn:
+#                             sentence[j][9] = sentence[j][8]
+#                             sentence[j][11] = sentence[j][10]
+
+#                         head = sentence[j][9] # PHEAD
+
+#                         deprel = sentence[j][11] # PDEPREL
+
+#                         tag = sentence[j][14+predicate_idx] # APRED
+
+#                         if tag != '_':
+#                             argument_sum += 1
+
+#                         if unify_pred:
+#                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), str(int(ID)+1), str(int(ID)+1), str(IS_PRED), word, lemma, pos, str(int(head)+1), str(int(head)+1), deprel, tag])
+#                         else:
+#                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)), ID, ID, str(IS_PRED), word, lemma, pos, head, head, deprel, tag])
+                        
+#                     if len(output_block)>0:
+#                         output_data.append(output_block)
+#                         for item in output_block:
+#                             f.write('\t'.join(item))
+#                             f.write('\n')
+#                         f.write('\n')
+                    
+#                     predicate_idx += 1
+
+#             sentence_idx += 1
+
+#     if pickle_dump_path is not None:
+#         dump_data = {'predicate_sum':predicate_sum, 'target_sum':target_sum, 'out_of_target_sum':0, 'argument_sum':argument_sum, 'out_of_pruning_sum':0, 'input_data':output_data, 'K':0}
+#         with open(pickle_dump_path, 'wb') as df:
+#             pickle.dump(dump_data, df)
+
+
+
+
+
 # perform k-order pruning
 # SENTID(0), PREDID(1), SENTLEN(2), TOKENID(3), RINDEX(4), FLAG(5), FORM(6), LEMMA(7), POS(8), HEAD(9), RHEAD(10), DEPREL(11), LABEL(12)
 # argument model input will copy the sentence by count of predicate.
 # note: in pruning input, the RINDEX!=TOKENID and HEAD!=RHEAD because of pruning.
-def make_k_order_pruning_dataset_input(dataset_file, output_path, K, quiet=False, random_error_prob=0.0, deprel_vocab=None, overflow_max=10, output_pruning_path=None, unify_pred=False, predicate_recog_data=None): # , word_filter=None
+# def make_k_order_pruning_dataset_input(dataset_file, output_path, K, quiet=False, random_error_prob=0.0, deprel_vocab=None, overflow_max=10, output_pruning_path=None, unify_pred=False, predicate_recog_data=None): # , word_filter=None
 
-    with open(dataset_file,'r') as f:
-        data = f.readlines()
+#     with open(dataset_file,'r') as f:
+#         data = f.readlines()
 
-    # total_pos_counter = Counter()
-    # argument_pos_counter = Counter()
-    # pruning_word_pos_counter = Counter()
+#     # total_pos_counter = Counter()
+#     # argument_pos_counter = Counter()
+#     # pruning_word_pos_counter = Counter()
 
-    # load the dataset
-    origin_data = []
-    sentence = []
-    for i in range(len(data)):
-        if len(data[i].strip())>0:
-            sentence.append(data[i].strip().split('\t'))
-        else:
-            origin_data.append(sentence)
-            sentence = []
+#     # load the dataset
+#     origin_data = []
+#     sentence = []
+#     for i in range(len(data)):
+#         if len(data[i].strip())>0:
+#             sentence.append(data[i].strip().split('\t'))
+#         else:
+#             origin_data.append(sentence)
+#             sentence = []
 
-    if len(sentence) > 0:
-        origin_data.append(sentence)
+#     if len(sentence) > 0:
+#         origin_data.append(sentence)
 
-    # filter the predicate by recognition results in ConNLL2008 task
-    if predicate_recog_data is not None:
-        with open(predicate_recog_data, 'r') as f:
-            pred_recog_data = f.readlines()
+#     # filter the predicate by recognition results in ConNLL2008 task
+#     if predicate_recog_data is not None:
+#         with open(predicate_recog_data, 'r') as f:
+#             pred_recog_data = f.readlines()
 
-        pred_predict_data = []
-        pre_sentence = []
+#         pred_predict_data = []
+#         pre_sentence = []
 
-        for i in range(len(pred_recog_data)):
-            if len(pred_recog_data[i].strip())>0:
-                pre_sentence.append(pred_recog_data[i].strip().split('\t'))
-            else:
-                pred_predict_data.append(pre_sentence)
-                pre_sentence = []
+#         for i in range(len(pred_recog_data)):
+#             if len(pred_recog_data[i].strip())>0:
+#                 pre_sentence.append(pred_recog_data[i].strip().split('\t'))
+#             else:
+#                 pred_predict_data.append(pre_sentence)
+#                 pre_sentence = []
 
-        if len(pre_sentence) > 0:
-            pred_predict_data.append(pre_sentence)
+#         if len(pre_sentence) > 0:
+#             pred_predict_data.append(pre_sentence)
 
-        assert len(origin_data) == len(pred_predict_data)
+#         assert len(origin_data) == len(pred_predict_data)
 
-        pred_total = 0
-        recog_correct = 0
-        recog_label_correct = 0
+#         pred_total = 0
+#         recog_correct = 0
+#         recog_label_correct = 0
 
-        for i in range(len(origin_data)):
-            assert len(origin_data[i]) == len(pred_predict_data[i])
-            for j in range(len(origin_data[i])):
-                if origin_data[i][j][12]=='Y':
-                    pred_total += 1
-                if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]!='_':
-                    recog_correct += 1
-                if origin_data[i][j][12]=='Y' and origin_data[i][j][13].split('.')[1] == pred_predict_data[i][j][1]:
-                    recog_label_correct += 1
-                if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]=='_':
-                    origin_data[i][j][12] = '_'
-        if not quiet:
-            print('\t predicate recognition total:{} correct:{} label correct:{}'.format(pred_total, recog_correct, recog_label_correct))
+#         for i in range(len(origin_data)):
+#             assert len(origin_data[i]) == len(pred_predict_data[i])
+#             for j in range(len(origin_data[i])):
+#                 if origin_data[i][j][12]=='Y':
+#                     pred_total += 1
+#                 if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]!='_':
+#                     recog_correct += 1
+#                 if origin_data[i][j][12]=='Y' and origin_data[i][j][13].split('.')[1] == pred_predict_data[i][j][1]:
+#                     recog_label_correct += 1
+#                 if origin_data[i][j][12]=='Y' and pred_predict_data[i][j][1]=='_':
+#                     origin_data[i][j][12] = '_'
+#         if not quiet:
+#             print('\t predicate recognition total:{} correct:{} label correct:{}'.format(pred_total, recog_correct, recog_label_correct))
 
-    if not quiet:
-        print('\tdump dataset input at:{}'.format(output_path))
+#     if not quiet:
+#         print('\tdump dataset input at:{}'.format(output_path))
 
-    out_of_pruning_sum = 0
-    argument_sum = 0
-    target_sum = 0
-    out_of_target_sum = 0
+#     out_of_pruning_sum = 0
+#     argument_sum = 0
+#     target_sum = 0
+#     out_of_target_sum = 0
 
-    # generate syntactic random error
-    uas_count = 0
-    las_count = 0
-    total = 0
-    if random_error_prob > 0.0:
-        for idx in tqdm(range(len(origin_data))):
-            sentence = origin_data[idx]
-            for item in sentence:
-                item[9] = item[8]
-                item[11] = item[10]
-            for item in sentence:
-                rd = random.randint(0,10000)/10000
-                if rd < random_error_prob:
-                    overflow_ctx = 0
-                    while overflow_ctx < overflow_max:
-                        rd_head = random.randint(0,len(sentence))
-                        if is_valid_tree(sentence, rd_head, int(item[0])):
-                            item[9] = str(rd_head)
-                            break
-                        overflow_ctx += 1
-                    rd_rel = deprel_vocab[random.randint(0,len(deprel_vocab)-1)]
-                    item[11] = rd_rel
-                total += 1
-                if item[8] == item[9]:
-                    uas_count += 1
-                if item[8] == item[9] and item[10] == item[11]:
-                    las_count += 1
-        if not quiet:
-            print('\t after random error UAS:{:.2f} LAS:{:.2f}'.format(uas_count/total*100,las_count/total*100))
+#     # generate syntactic random error
+#     uas_count = 0
+#     las_count = 0
+#     total = 0
+#     if random_error_prob > 0.0:
+#         for idx in tqdm(range(len(origin_data))):
+#             sentence = origin_data[idx]
+#             for item in sentence:
+#                 item[9] = item[8]
+#                 item[11] = item[10]
+#             for item in sentence:
+#                 rd = random.randint(0,10000)/10000
+#                 if rd < random_error_prob:
+#                     overflow_ctx = 0
+#                     while overflow_ctx < overflow_max:
+#                         rd_head = random.randint(0,len(sentence))
+#                         if is_valid_tree(sentence, rd_head, int(item[0])):
+#                             item[9] = str(rd_head)
+#                             break
+#                         overflow_ctx += 1
+#                     rd_rel = deprel_vocab[random.randint(0,len(deprel_vocab)-1)]
+#                     item[11] = rd_rel
+#                 total += 1
+#                 if item[8] == item[9]:
+#                     uas_count += 1
+#                 if item[8] == item[9] and item[10] == item[11]:
+#                     las_count += 1
+#         if not quiet:
+#             print('\t after random error UAS:{:.2f} LAS:{:.2f}'.format(uas_count/total*100,las_count/total*100))
 
-    sentence_idx = 0
-    with open(output_path, 'w') as f:
-        for sidx in tqdm(range(len(origin_data))):
-            sentence = origin_data[sidx]
-            predicate_idx = 0
+#     sentence_idx = 0
+#     with open(output_path, 'w') as f:
+#         for sidx in tqdm(range(len(origin_data))):
+#             sentence = origin_data[sidx]
+#             predicate_idx = 0
 
-            # record the syntactic son for every node.(include dummy ROOT)
-            syntactic_son_list = [[[] for _ in range(len(sentence)+1)] for _ in range(K)]
-            for oidx in range(K):
-                for i in range(len(sentence)):
-                    if oidx == 0:
-                        syntactic_son_list[oidx][int(sentence[i][9])].append(int(sentence[i][0]))
-                    else:
-                        for k in range(len(syntactic_son_list[oidx-1])):
-                            if int(sentence[i][9]) in syntactic_son_list[oidx-1][k]:
-                                syntactic_son_list[oidx][k].append(int(sentence[i][0]))
-                                break
+#             # record the syntactic son for every node.(include dummy ROOT)
+#             syntactic_son_list = [[[] for _ in range(len(sentence)+1)] for _ in range(K)]
+#             for oidx in range(K):
+#                 for i in range(len(sentence)):
+#                     if oidx == 0:
+#                         syntactic_son_list[oidx][int(sentence[i][9])].append(int(sentence[i][0]))
+#                     else:
+#                         for k in range(len(syntactic_son_list[oidx-1])):
+#                             if int(sentence[i][9]) in syntactic_son_list[oidx-1][k]:
+#                                 syntactic_son_list[oidx][k].append(int(sentence[i][0]))
+#                                 break
             
-            for i in range(len(sentence)):
+#             for i in range(len(sentence)):
 
-                if sentence[i][12] == 'Y':
+#                 if sentence[i][12] == 'Y':
 
-                    argument_set = set()
-                    pruning_set = set()
+#                     argument_set = set()
+#                     pruning_set = set()
 
-                    # for this predicate we do pruning by syntactic grammar.
-                    current_node_idx = int(sentence[i][0])
+#                     # for this predicate we do pruning by syntactic grammar.
+#                     current_node_idx = int(sentence[i][0])
 
-                    output_block = []
+#                     output_block = []
 
-                    reserve_set = set()
+#                     reserve_set = set()
 
-                    while True:
+#                     while True:
 
-                        for item in syntactic_son_list:
-                            reserve_set.update(item[current_node_idx])
+#                         for item in syntactic_son_list:
+#                             reserve_set.update(item[current_node_idx])
 
-                        if current_node_idx != 0:
-                            current_node_idx = int(sentence[current_node_idx-1][9])
-                        else:
-                            break  
+#                         if current_node_idx != 0:
+#                             current_node_idx = int(sentence[current_node_idx-1][9])
+#                         else:
+#                             break  
                     
-                    #
-                    # pruning_word_set = set([h+1 for h in range(len(sentence))]) - reserve_set
-                    # pruning_word_set = list(pruning_word_set)
-                    # for j in range(len(pruning_word_set)):
-                    #     pruning_word_pos_counter.update([sentence[pruning_word_set[j]-1][5]])
+#                     #
+#                     # pruning_word_set = set([h+1 for h in range(len(sentence))]) - reserve_set
+#                     # pruning_word_set = list(pruning_word_set)
+#                     # for j in range(len(pruning_word_set)):
+#                     #     pruning_word_pos_counter.update([sentence[pruning_word_set[j]-1][5]])
 
-                    if unify_pred:
-                        output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), '1', '1', '0', '<DUMMY>', '<DUMMY>', '<DUMMY>', str(int(sentence[i][0])+1), str(int(sentence[i][0])+1), '<DUMMY>', sentence[i][13].split('.')[1]])
+#                     if unify_pred:
+#                         output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), '1', '1', '0', '<DUMMY>', '<DUMMY>', '<DUMMY>', str(int(sentence[i][0])+1), str(int(sentence[i][0])+1), '<DUMMY>', sentence[i][13].split('.')[1]])
 
-                    reserve_set = list(reserve_set)
+#                     reserve_set = list(reserve_set)
 
-                    for j in range(len(reserve_set)):
+#                     for j in range(len(reserve_set)):
 
-                        item_pos = reserve_set[j]-1
+#                         item_pos = reserve_set[j]-1
 
-                        ID = sentence[item_pos][0] # ID
+#                         ID = sentence[item_pos][0] # ID
 
-                        IS_PRED = 0
-                        if i == item_pos:
-                            IS_PRED = 1
+#                         IS_PRED = 0
+#                         if i == item_pos:
+#                             IS_PRED = 1
                         
-                        word = sentence[item_pos][1].lower() # FORM
+#                         word = sentence[item_pos][1].lower() # FORM
 
-                        # if word_filter is not None and word_filter.get(word) is not None:
-                        #     continue
+#                         # if word_filter is not None and word_filter.get(word) is not None:
+#                         #     continue
 
-                        if is_number(word):
-                            word = _NUM_
+#                         if is_number(word):
+#                             word = _NUM_
 
 
-                        pruning_set.add(item_pos)
+#                         pruning_set.add(item_pos)
                         
-                        lemma = sentence[item_pos][3].lower() # PLEMMA
-                        if is_number(lemma):
-                            lemma = _NUM_
+#                         lemma = sentence[item_pos][3].lower() # PLEMMA
+#                         if is_number(lemma):
+#                             lemma = _NUM_
 
-                        pos = sentence[item_pos][5] # PPOS
+#                         pos = sentence[item_pos][5] # PPOS
 
-                        head = sentence[item_pos][9] #PHEAD
+#                         head = sentence[item_pos][9] #PHEAD
 
-                        deprel = sentence[item_pos][11] # PDEPREL
+#                         deprel = sentence[item_pos][11] # PDEPREL
 
-                        tag = sentence[item_pos][14+predicate_idx] # APRED
+#                         tag = sentence[item_pos][14+predicate_idx] # APRED
 
-                        # total_pos_counter.update([pos])
+#                         # total_pos_counter.update([pos])
 
-                        # if tag != '_':
-                        #     argument_pos_counter.update([pos])
+#                         # if tag != '_':
+#                         #     argument_pos_counter.update([pos])
 
-                        if unify_pred:
-                            output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), str(int(ID)+1), str(int(ID)+1), str(IS_PRED), word, lemma, pos, str(int(head)+1), str(int(head)+1), deprel, tag])         
-                        else:
-                            output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)), ID, ID, str(IS_PRED), word, lemma, pos, head, head, deprel, tag])
+#                         if unify_pred:
+#                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)+1), str(int(ID)+1), str(int(ID)+1), str(IS_PRED), word, lemma, pos, str(int(head)+1), str(int(head)+1), deprel, tag])         
+#                         else:
+#                             output_block.append([str(sentence_idx), str(predicate_idx), str(len(sentence)), ID, ID, str(IS_PRED), word, lemma, pos, head, head, deprel, tag])
                          
-                    output_block.sort(key=lambda x:int(x[3]))
+#                     output_block.sort(key=lambda x:int(x[3]))
 
-                    index_map = dict()
-                    for idx in range(len(output_block)):
-                        index_map[str(output_block[idx][3])] = str(idx+1)
+#                     index_map = dict()
+#                     for idx in range(len(output_block)):
+#                         index_map[str(output_block[idx][3])] = str(idx+1)
 
-                    for item in output_block:
-                        item[4] = index_map[str(item[4])]
-                        if item[10] != '0':
-                            item[10] = index_map[str(item[10])]
-                        f.write('\t'.join(item))
-                        f.write('\n')
-                    f.write('\n')
+#                     for item in output_block:
+#                         item[4] = index_map[str(item[4])]
+#                         if item[10] != '0':
+#                             item[10] = index_map[str(item[10])]
+#                         f.write('\t'.join(item))
+#                         f.write('\n')
+#                     f.write('\n')
 
-                    target_sum += len(sentence)
-                    if not unify_pred:
-                        out_of_target_sum += (len(sentence)-len(output_block))
-                    else:
-                        out_of_target_sum += (len(sentence)+1-len(output_block))
+#                     target_sum += len(sentence)
+#                     if not unify_pred:
+#                         out_of_target_sum += (len(sentence)-len(output_block))
+#                     else:
+#                         out_of_target_sum += (len(sentence)+1-len(output_block))
 
-                    for j in range(len(sentence)):
-                        if sentence[j][14+predicate_idx] != '_':
-                            argument_set.add(j)
+#                     for j in range(len(sentence)):
+#                         if sentence[j][14+predicate_idx] != '_':
+#                             argument_set.add(j)
 
-                    # statistic in argument but not in pruning
-                    argument_sum += len(argument_set)
-                    out_of_pruning = argument_set - pruning_set
-                    out_of_pruning_sum += len(out_of_pruning)
+#                     # statistic in argument but not in pruning
+#                     argument_sum += len(argument_set)
+#                     out_of_pruning = argument_set - pruning_set
+#                     out_of_pruning_sum += len(out_of_pruning)
 
-                    predicate_idx += 1
+#                     predicate_idx += 1
 
-            sentence_idx += 1
+#             sentence_idx += 1
 
-    if not quiet:
-        print('\n\ttarget sum:{} prune target sum:{} argument sum:{} prune argument sum:{} argument coverage:{:.2f}'.format(target_sum, out_of_target_sum, argument_sum, out_of_pruning_sum, (argument_sum-out_of_pruning_sum)/argument_sum*100))  
-        # print('\n\tword total pos tag: {}'.format(total_pos_counter))
-        # print('\n\targument pos tag: {}'.format(argument_pos_counter))
-        # print('\n\tword prune pos tag: {}'.format(pruning_word_pos_counter))
-        # total_pos_set = set([item[0] for item in total_pos_counter.most_common()])
-        # argument_pos_set = set([item[0] for item in argument_pos_counter.most_common() if item[1] > 100])
-        # filter_set = total_pos_set-argument_pos_set
-        # print('\n\tfilter pos tag: {} count: {}'.format(filter_set, sum([total_pos_counter[item] for item in filter_set])))
+#     if not quiet:
+#         print('\n\ttarget sum:{} prune target sum:{} argument sum:{} prune argument sum:{} argument coverage:{:.2f}'.format(target_sum, out_of_target_sum, argument_sum, out_of_pruning_sum, (argument_sum-out_of_pruning_sum)/argument_sum*100))  
+#         # print('\n\tword total pos tag: {}'.format(total_pos_counter))
+#         # print('\n\targument pos tag: {}'.format(argument_pos_counter))
+#         # print('\n\tword prune pos tag: {}'.format(pruning_word_pos_counter))
+#         # total_pos_set = set([item[0] for item in total_pos_counter.most_common()])
+#         # argument_pos_set = set([item[0] for item in argument_pos_counter.most_common() if item[1] > 100])
+#         # filter_set = total_pos_set-argument_pos_set
+#         # print('\n\tfilter pos tag: {} count: {}'.format(filter_set, sum([total_pos_counter[item] for item in filter_set])))
 
 # predicate model input 
 # SENTID(0), SENTLEN(1), TOKENID(2), FLAG(3), FORM(4), LEMMA(5), POS(6), LABEL(7)
-def make_pred_dataset_input(dataset_file, output_path, quiet=False):
-    with open(dataset_file,'r') as f:
-        data = f.readlines()
+# def make_pred_dataset_input(dataset_file, output_path, quiet=False):
+#     with open(dataset_file,'r') as f:
+#         data = f.readlines()
 
-    origin_data = []
-    sentence = []
-    for i in range(len(data)):
-        if len(data[i].strip())>0:
-            sentence.append(data[i].strip().split('\t'))
-        else:
-            origin_data.append(sentence)
-            sentence = []
+#     origin_data = []
+#     sentence = []
+#     for i in range(len(data)):
+#         if len(data[i].strip())>0:
+#             sentence.append(data[i].strip().split('\t'))
+#         else:
+#             origin_data.append(sentence)
+#             sentence = []
 
-    if len(sentence) > 0:
-        origin_data.append(sentence)
+#     if len(sentence) > 0:
+#         origin_data.append(sentence)
 
-    if not quiet:
-        print('\tdump dataset input at:{}'.format(output_path))
+#     if not quiet:
+#         print('\tdump dataset input at:{}'.format(output_path))
 
-    sentence_idx = 0
-    with open(output_path, 'w') as f:
-        for sentence in origin_data:
-            for item in sentence:
+#     sentence_idx = 0
+#     with open(output_path, 'w') as f:
+#         for sentence in origin_data:
+#             for item in sentence:
 
-                ID = item[0] # ID
+#                 ID = item[0] # ID
 
-                IS_PRED = 0
+#                 IS_PRED = 0
 
-                if item[12] == 'Y':
-                    IS_PRED = 1
+#                 if item[12] == 'Y':
+#                     IS_PRED = 1
 
-                word = item[1].lower() # FORM
-                if is_number(word):
-                    word = _NUM_
+#                 word = item[1].lower() # FORM
+#                 if is_number(word):
+#                     word = _NUM_
 
-                lemma = item[3].lower() # PLEMMA
-                if is_number(lemma):
-                    lemma = _NUM_
+#                 lemma = item[3].lower() # PLEMMA
+#                 if is_number(lemma):
+#                     lemma = _NUM_
 
-                pos = item[5] # PPOS
+#                 pos = item[5] # PPOS
 
-                if item[12] != 'Y':
-                    tag = item[13] # PRED
-                else:
-                    tag = item[13].split('.')[1]
+#                 if item[12] != 'Y':
+#                     tag = item[13] # PRED
+#                 else:
+#                     tag = item[13].split('.')[1]
 
-                f.write('\t'.join([str(sentence_idx) , str(len(sentence)), ID, str(IS_PRED), word, lemma, pos, tag]))
+#                 f.write('\t'.join([str(sentence_idx) , str(len(sentence)), ID, str(IS_PRED), word, lemma, pos, tag]))
 
-                f.write('\n')
+#                 f.write('\n')
 
-            f.write('\n')
+#             f.write('\n')
 
-            sentence_idx += 1
+#             sentence_idx += 1
 
 # predicate recognition model input 
 # SENTID(0), SENTLEN(1), TOKENID(2), FORM(3), LEMMA(4), POS(5), LABEL(6)
-def make_pred_recog_dataset_input(dataset_file, output_path, quiet=False):
-    with open(dataset_file,'r') as f:
-        data = f.readlines()
+# def make_pred_recog_dataset_input(dataset_file, output_path, quiet=False):
+#     with open(dataset_file,'r') as f:
+#         data = f.readlines()
 
-    origin_data = []
-    sentence = []
-    for i in range(len(data)):
-        if len(data[i].strip())>0:
-            sentence.append(data[i].strip().split('\t'))
-        else:
-            origin_data.append(sentence)
-            sentence = []
+#     origin_data = []
+#     sentence = []
+#     for i in range(len(data)):
+#         if len(data[i].strip())>0:
+#             sentence.append(data[i].strip().split('\t'))
+#         else:
+#             origin_data.append(sentence)
+#             sentence = []
 
-    if len(sentence) > 0:
-        origin_data.append(sentence)
+#     if len(sentence) > 0:
+#         origin_data.append(sentence)
 
-    if not quiet:
-        print('\tdump dataset input at:{}'.format(output_path))
+#     if not quiet:
+#         print('\tdump dataset input at:{}'.format(output_path))
 
-    sentence_idx = 0
-    with open(output_path, 'w') as f:
-        for sentence in origin_data:
-            for item in sentence:
+#     sentence_idx = 0
+#     with open(output_path, 'w') as f:
+#         for sentence in origin_data:
+#             for item in sentence:
 
-                ID = item[0] # ID
+#                 ID = item[0] # ID
 
-                word = item[1].lower() # FORM
-                if is_number(word):
-                    word = _NUM_
+#                 word = item[1].lower() # FORM
+#                 if is_number(word):
+#                     word = _NUM_
 
-                lemma = item[3].lower() # PLEMMA
-                if is_number(lemma):
-                    lemma = _NUM_
+#                 lemma = item[3].lower() # PLEMMA
+#                 if is_number(lemma):
+#                     lemma = _NUM_
 
-                pos = item[5] # PPOS
+#                 pos = item[5] # PPOS
 
-                if item[12] != 'Y':
-                    tag = item[13] # PRED
-                else:
-                    tag = item[13].split('.')[1]
+#                 if item[12] != 'Y':
+#                     tag = item[13] # PRED
+#                 else:
+#                     tag = item[13].split('.')[1]
 
-                f.write('\t'.join([str(sentence_idx) , str(len(sentence)), ID, word, lemma, pos, tag]))
+#                 f.write('\t'.join([str(sentence_idx) , str(len(sentence)), ID, word, lemma, pos, tag]))
 
-                f.write('\n')
+#                 f.write('\n')
 
-            f.write('\n')
+#             f.write('\n')
 
-            sentence_idx += 1
+#             sentence_idx += 1
 
 def stat_max_order(dataset_file):
     with open(dataset_file,'r') as f:
