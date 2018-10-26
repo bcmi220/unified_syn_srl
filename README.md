@@ -74,6 +74,8 @@ python run.py --eval --train_data data/conll09-english/conll09_train.dataset --v
 ```
 
 # Notes
-You can refer to our paper for more details. Thank you!
+You can refer to our paper for more details. Thank you! 
+
+Four types of syntactic inputs are used to explore the role of syntax in our unified framework, (1) the automatically predicted parse provided by CoNLL-2009 shared task, (2) the parsing results of the CoNLL-2009 data by state-of-the-art syntactic parser, the Biaffine Parser (Dozat and Manning, 2017), (3) corresponding results from another parser, the BIST Parser (Kiperwasser and Goldberg, 2016), which is also adopted by Marcheggiani and Titov (2017), (4) the gold syntax available from the official data set.
 
 
